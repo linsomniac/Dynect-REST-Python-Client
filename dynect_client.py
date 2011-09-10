@@ -99,6 +99,7 @@ class DynectDNSClient:
 
 
   def _login(self):
+    self._log('_login()')
     try:
       response = self._request("Session/", {'customer_name': self.customerName,
                                                   'user_name': self.userName,
@@ -112,15 +113,17 @@ class DynectDNSClient:
     if response['status'] != 'success':
       self._log('Login failed due to "status" of "%s"' % response['status'])
       raise LoginFailed(status = response['status'], msgs = response['msgs'])
+
     self.sessionToken = response['data']['token']
 
+
   def _request(self, url, post, type=None):
+    if not self.sessionToken and url != 'Session/':
+      self._log('Doing login because _request() had no token...')
+      self._login()
+
     self._log('_request(url="%s", post="%s", type="%s")' % ( url, post, type ))
     fullurl = "https://api2.dynect.net/REST/%s" % url
-
-    if not self.sessionToken and url != 'Session/':
-      self._log('Doing login...')
-      self._login()
 
     if post:
       postdata = simplejson.dumps(post)
