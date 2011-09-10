@@ -11,7 +11,7 @@ class DynectDNSClient:
   def getRecords(self, hostName, type="A", domainName=None):
     if not domainName:
       domainName = self.defaultDomainName
-      
+
     try:
       response = self._request('ANYRecord/%s/%s/' % (domainName, hostName), None)
       return response['data']
@@ -21,9 +21,9 @@ class DynectDNSClient:
       else:
         raise e
 
-  def addRecord(self, data, hostName, type="A", TTL=3600, domainName=None):    
+  def addRecord(self, data, hostName, type="A", TTL=3600, domainName=None):
     url, fieldName = self._api_details(type)
-      
+
     if not domainName:
       domainName = self.defaultDomainName
 
@@ -34,7 +34,7 @@ class DynectDNSClient:
     response = self._request(url, data)
     if response['status'] != 'success':
       return False
-    
+
     response = self._publish(domainName)
     return True
 
@@ -83,7 +83,7 @@ class DynectDNSClient:
       req = MethodRequest(fullurl, postdata)
     else:
       req = MethodRequest(fullurl)
-      
+
     req.add_header('Content-Type', 'application/json')
     req.add_header('Auth-Token', self.sessionToken)
     if type:
@@ -112,5 +112,5 @@ class MethodRequest(urllib2.Request):
     if self.method:
       return self.method
     return urllib2.Request.get_method(self)
-      
+
 
