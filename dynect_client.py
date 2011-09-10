@@ -39,7 +39,9 @@ class DynectDNSClient:
     sys.stderr.write('LOG: ' + msg.rstrip() + '\n')
 
 
-  def getRecords(self, hostName, type="A", domainName=None):
+  def getRecords(self, hostName, recordType="A", domainName=None):
+    self._log('getRecords(hostName="%s", recordType="%s", domainName="%s"'
+        % ( hostName, recordType, domainName ))
     if not domainName:
       domainName = self.defaultDomainName
 
@@ -52,8 +54,11 @@ class DynectDNSClient:
       else:
         raise e
 
-  def addRecord(self, data, hostName, type="A", TTL=3600, domainName=None):
-    url, fieldName = self._api_details(type)
+  def addRecord(self, data, hostName, recordType="A", TTL=3600, domainName=None):
+    self._log('addRecord(data="%s", hostName="%s", recordType="%s", '
+        'TTL=%s domainName="%s"'
+        % ( data, hostName, recordType, TTL, domainName ))
+    url, fieldName = self._api_details(recordType)
 
     if not domainName:
       domainName = self.defaultDomainName
@@ -69,11 +74,13 @@ class DynectDNSClient:
     response = self._publish(domainName)
     return True
 
-  def deleteRecord(self, data, hostName, type="A", domainName=None):
+  def deleteRecord(self, data, hostName, recordType="A", domainName=None):
+    self._log('deleteRecord(data="%s", hostName="%s", recordType="%s", '
+        'domainName="%s"' % ( data, hostName, recordType, domainName ))
     if not domainName:
       domainName = self.defaultDomainName
 
-    data = self.getRecords(hostName, type, domainName)
+    data = self.getRecords(hostName, recordType, domainName)
     if not data:
       return False
 
@@ -87,15 +94,15 @@ class DynectDNSClient:
 
     return True
 
-  def _api_details(self, type):
-    if type == "A":
+  def _api_details(self, recordType):
+    if recordType == "A":
       return ("ARecord", "address")
     else:
       return ("CNameRecord", "cname")
 
 
   def _publish(self, domainName=None):
-    self._request("Zone/%s" % domainName, {"publish": True}, type="PUT")
+    self._request("Zone/%s" % domainName, {"publish": True}, method="PUT")
 
 
   def _login(self):
@@ -117,12 +124,13 @@ class DynectDNSClient:
     self.sessionToken = response['data']['token']
 
 
-  def _request(self, url, post, type=None):
+  def _request(self, url, post, method=None):
     if not self.sessionToken and url != 'Session/':
       self._log('Doing login because _request() had no token...')
       self._login()
 
-    self._log('_request(url="%s", post="%s", type="%s")' % ( url, post, type ))
+    self._log('_request(url="%s", post="%s", method="%s")'
+        % ( url, post, method ))
     fullurl = "https://api2.dynect.net/REST/%s" % url
 
     if post:
@@ -133,11 +141,11 @@ class DynectDNSClient:
 
     req.add_header('Content-Type', 'application/json')
     req.add_header('Auth-Token', self.sessionToken)
-    if type:
-      setattr(req, "method", type)
+    if method:
+      setattr(req, "method", method)
 
     resp = urllib2.urlopen(req)
-    if type:
+    if method:
       return resp
     else:
       data = resp.read()
