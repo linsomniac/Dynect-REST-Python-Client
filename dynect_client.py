@@ -33,9 +33,16 @@ class HTTPResponse(Exception):
   '''
   ######################################
   def __init__(self, response, content):
-    super(HTTPResponse, self).__init__()
+    self.msg = 'Status code: %s, response: %s, content: %s' % (
+        response['status'], repr(response), repr(content) )
+    super(HTTPResponse, self).__init__(self.msg)
     self.response = response
     self.content = content
+
+  def __repr__(self):
+    return self.msg
+
+  __str__ = __repr__
 
 
 ###################
@@ -67,6 +74,37 @@ class DynectDNSClient:
 
 
   #############################################################
+  def getANYRecord(self, fqdn, zone = None):
+    '''Get a list of records in this `fqdn`.  This recursively does a GET
+    request on each of those records, and returns the list of the `data`
+    elements of those records.
+
+    If any of those gets returns a status other than "successful", a
+    `ValueError` is raised.
+    '''
+    if not zone: zone = self.defaultDomainName
+    if not '.' in fqdn: fqdn = fqdn + '.' + zone
+
+    resource = joinURL('ANYRecord', zone, fqdn)
+
+    response = self._request('GET', resource)
+
+    results = []
+    for new_resource in response['data']:
+      if new_resource.startswith('/REST/'):
+        new_resource = new_resource[6:]
+      new_response = self._request('GET', new_resource)
+
+      if new_response['status'] != 'success':
+        raise ValueError('Got unsuccessful status "%s" on resource "%s"'
+            % ( new_response['status'], new_resource ))
+
+      results.append(new_response['data'])
+
+    return results
+
+
+  #############################################################
   def getCNAMERecord(self, fqdn, recordId = None, zone = None):
     if not zone: zone = self.defaultDomainName
     if not '.' in fqdn: fqdn = fqdn + '.' + zone
@@ -76,6 +114,41 @@ class DynectDNSClient:
       resource = joinURL(resource, recordId)
 
     self._request('GET', resource)
+
+
+  #############################################################
+  def putCNAMERecord(self, fqdn, cname, ttl = None, zone = None):
+    if not zone: zone = self.defaultDomainName
+    if not '.' in fqdn: fqdn = fqdn + '.' + zone
+
+    resource = joinURL('CNAMERecord', zone, fqdn)
+
+    arguments = { 'rdata' : { 'cname' : cname } }
+    if ttl:
+      arguments['ttl'] = ttl
+    else:
+      arguments['ttl'] = '0'
+
+    self._request('POST', resource, arguments)
+
+
+  #####################################################################
+  def updateCNAMERecord(self, fqdn, cname, ttl = None, recordId = None,
+      zone = None):
+    if not zone: zone = self.defaultDomainName
+    if not '.' in fqdn: fqdn = fqdn + '.' + zone
+
+    resource = joinURL('CNAMERecord', zone, fqdn)
+    if recordId:
+      resource = joinURL(resource, recordId)
+
+    arguments = { 'rdata' : { 'cname' : cname } }
+    if ttl:
+      arguments['ttl'] = ttl
+    else:
+      arguments['ttl'] = '0'
+
+    self._request('PUT', resource, arguments)
 
 
   ###############################
