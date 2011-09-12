@@ -14,18 +14,22 @@ which has a discrete method for each record type.  I came to the above
 conclusion as I was experimenting with the CNAME.
 
 Example:
+  from dynect_client import *
+
   customername = 'customer'
   username = 'user'
   password = 'password'
   zone = 'example.com'
   hostname = 'a.example.com'
+  cname1 = '1a.example.com'
+  cname2 = '2a.example.com'
 
   dyn = DynectDNSClient(customername, username, password, zone)
   dyn.debug()
   print dyn.getANYRecord(zone)
   print dyn.getCNAMERecord(hostname)
-  print dyn.newCNAMERecord(hostname, '1' + hostname)
-  print dyn.updateCNAMERecord(hostname, '1' + hostname)
+  print dyn.newCNAMERecord(hostname, cname1)
+  print dyn.updateCNAMERecord(hostname, cname2)
   print dyn.deleteCNAMERecord(hostname)
   print dyn.updateZone(publish = True)
 '''
