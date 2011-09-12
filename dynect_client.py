@@ -50,6 +50,7 @@ class DynectDNSClient:
       return response['data']
     except urllib2.HTTPError, e:
       if e.code == 404:
+        self._log('Record not found')
         return None
       else:
         raise e
@@ -67,9 +68,11 @@ class DynectDNSClient:
     data = {"ttl": str(TTL),
             "rdata": { fieldName: data }}
 
-    response = self._request(url, data)
-    if response['status'] != 'success':
-      return False
+    if False:
+      response = self._request(url, data)
+      if response['status'] != 'success':
+        self._log('Lookup of record failed')
+        return False
 
     response = self._publish(domainName)
     return True
@@ -98,11 +101,7 @@ class DynectDNSClient:
     if recordType == "A":
       return ("ARecord", "address")
     else:
-      return ("CNameRecord", "cname")
-
-
-  def _publish(self, domainName=None):
-    self._request("Zone/%s" % domainName, {"publish": True}, method="PUT")
+      return ("CNAMERecord", "cname")
 
 
   def _login(self):
@@ -122,6 +121,11 @@ class DynectDNSClient:
       raise LoginFailed(status = response['status'], msgs = response['msgs'])
 
     self.sessionToken = response['data']['token']
+
+
+  def _publish(self, domainName=None):
+    self._log('Doing publish')
+    self._request("Zone/%s" % domainName, {"publish": True}, method="PUT")
 
 
   def _request(self, url, post, method=None):
@@ -144,13 +148,19 @@ class DynectDNSClient:
     if method:
       setattr(req, "method", method)
 
-    resp = urllib2.urlopen(req)
+    try:
+      resp = urllib2.urlopen(req)
+    except Exception, e:
+      self._log('Request raised exception: "%s"' % str(e))
+      raise
+
     if method:
+      self._log('Returning raw response')
       return resp
-    else:
-      data = resp.read()
-      self._log('JSON Response: "%s"' % data)
-      return simplejson.loads(data)
+
+    data = resp.read()
+    self._log('JSON Response: "%s"' % data)
+    return simplejson.loads(data)
 
 
 class MethodRequest(urllib2.Request):
