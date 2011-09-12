@@ -1,5 +1,6 @@
-import simplejson, urllib2, urllib, sys
+import simplejson, urllib2, urllib, sys, httplib2
 
+#############################
 class LoginFailed(Exception):
   '''Exception raised when a login fails.  Includes these attributes:
 
@@ -10,12 +11,255 @@ class LoginFailed(Exception):
     If the login failed with an HTTP error, `msgs` will an empty list, and
     `status` will be 'HTTP Error'.
     '''
+  #################################
   def __init__(self, status, msgs):
     self.status = status
     self.msgs = msgs
 
 
+##############################
+class HTTPResponse(Exception):
+  '''Exception raised when an HTTP session results in a non-200 status.
+  The attributes of this object include:
+
+    response -- A dictionary from the HTTP call with attributes such as:
+        * status
+        * transfer-encoding
+        * server
+        * connection
+        * content-type
+        * date
+    content -- The data read from the server in the response.
+  '''
+  ######################################
+  def __init__(self, response, content):
+    self.msg = 'Status code: %s, response: %s, content: %s' % (
+        response['status'], repr(response), repr(content) )
+    super(HTTPResponse, self).__init__(self.msg)
+    self.response = response
+    self.content = content
+
+  def __repr__(self):
+    return self.msg
+
+  __str__ = __repr__
+
+
+###################
+def joinURL(*args):
+  '''Join the elements into a URI by adding "/" between the arguments, and
+  removing any double slashes.
+  '''
+  url = '/'.join(args) + '/'
+
+  if url.startswith('http://'):
+    url = 'http://' + (url[7:].replace('//', '/'))
+  elif url.startswith('https://'):
+    url = 'https://' + (url[8:].replace('//', '/'))
+
+  return url
+
+
+######################
 class DynectDNSClient:
+  ###########################################################################
+  def __init__(self, customerName, userName, password, defaultDomain = None):
+    self.customerName = customerName
+    self.userName = userName
+    self.password = password
+    self.defaultDomainName = defaultDomain
+    self.sessionToken = None
+    self.debugEnabled = False
+    self.baseURL = 'https://api2.dynect.net/REST/'
+
+
+  #############################################################
+  def getANYRecord(self, fqdn, zone = None):
+    '''Get a list of records in this `fqdn`.  This recursively does a GET
+    request on each of those records, and returns the list of the `data`
+    elements of those records.
+
+    If any of those gets returns a status other than "successful", a
+    `ValueError` is raised.
+    '''
+    if not zone: zone = self.defaultDomainName
+    if not '.' in fqdn: fqdn = fqdn + '.' + zone
+
+    resource = joinURL('ANYRecord', zone, fqdn)
+
+    response = self._request('GET', resource)
+
+    results = []
+    for new_resource in response['data']:
+      if new_resource.startswith('/REST/'):
+        new_resource = new_resource[6:]
+      new_response = self._request('GET', new_resource)
+
+      if new_response['status'] != 'success':
+        raise ValueError('Got unsuccessful status "%s" on resource "%s"'
+            % ( new_response['status'], new_resource ))
+
+      results.append(new_response['data'])
+
+    return results
+
+
+  #############################################################
+  def getCNAMERecord(self, fqdn, recordId = None, zone = None):
+    if not zone: zone = self.defaultDomainName
+    if not '.' in fqdn: fqdn = fqdn + '.' + zone
+
+    resource = joinURL('CNAMERecord', zone, fqdn)
+    if recordId:
+      resource = joinURL(resource, recordId)
+
+    self._request('GET', resource)
+
+
+  #############################################################
+  def putCNAMERecord(self, fqdn, cname, ttl = None, zone = None):
+    if not zone: zone = self.defaultDomainName
+    if not '.' in fqdn: fqdn = fqdn + '.' + zone
+
+    resource = joinURL('CNAMERecord', zone, fqdn)
+
+    arguments = { 'rdata' : { 'cname' : cname } }
+    if ttl:
+      arguments['ttl'] = ttl
+    else:
+      arguments['ttl'] = '0'
+
+    self._request('POST', resource, arguments)
+
+
+  #####################################################################
+  def updateCNAMERecord(self, fqdn, cname, ttl = None, recordId = None,
+      zone = None):
+    if not zone: zone = self.defaultDomainName
+    if not '.' in fqdn: fqdn = fqdn + '.' + zone
+
+    resource = joinURL('CNAMERecord', zone, fqdn)
+    if recordId:
+      resource = joinURL(resource, recordId)
+
+    arguments = { 'rdata' : { 'cname' : cname } }
+    if ttl:
+      arguments['ttl'] = ttl
+    else:
+      arguments['ttl'] = '0'
+
+    self._request('PUT', resource, arguments)
+
+
+  ###############################
+  def debug(self, enable = True):
+    '''Enable or disable debugging messages.  If called with no arguments or
+    with the argument `True`, debugging is turned on, if `False` is passed
+    debugging is disabled.'''
+    httplib2.debuglevel = 1 if enable else 0
+    self.debugEnabled = enable
+
+
+  ####################
+  def _log(self, msg):
+    'INTERNAL: Log a message if the debugging flag is enabled.'
+    if not self.debugEnabled:
+      return
+    sys.stderr.write('LOG: ' + msg.rstrip() + '\n')
+
+
+  #################
+  def _login(self):
+    self._log('_login()')
+    try:
+      response = self._simple_request('POST', 'Session/',
+          {'customer_name': self.customerName, 'user_name': self.userName,
+            'password': self.password})
+    except urllib2.HTTPError, e:
+      if e.code == 400:
+        self._log('Login failed with HTTP 400 error, likely an account issue')
+        raise LoginFailed(status = 'HTTP Error', msgs = [])
+      raise
+
+    if response['status'] != 'success':
+      self._log('Login failed due to "status" of "%s"' % response['status'])
+      raise LoginFailed(status = response['status'], msgs = response['msgs'])
+
+    self.sessionToken = response['data']['token']
+
+
+  #######################################################
+  def _request(self, method, resource, arguments = None):
+    '''Make a request to the server, if a 307 status is reported, ping
+    the job periodically until it is completed.
+
+    If an HTTP error is raised, this will simply pass it along.  This will
+    perform a login if there is now existing session token.
+
+    Arguments:
+      method -- One of "GET", "POST", "DELETE", or "PUT".
+      resource -- The base resource URI such as "Session/".
+      arguments -- A dictionary containing the request arguments.
+
+    Return:
+      The object the server passed back.
+    '''
+    try:
+      response = self._simple_request(method, resource, arguments)
+      return response
+    except HTTPResponse, e:
+      if e.response['status'] != '307':
+        raise
+
+    #  get the jobid from the response
+    #  periodically poll the job URL
+    #  return response
+    raise NotImplementedError('Need to ask dynect what I can do to trigger this for testing.')
+
+
+  ##############################################################
+  def _simple_request(self, method, resource, arguments = None):
+    '''Make a request to the server, and return the result.
+
+    If an HTTP error is raised, this will simply pass it along.  This will
+    perform a login if there is now existing session token.
+
+    Arguments:
+      method -- One of "GET", "POST", "DELETE", or "PUT".
+      resource -- The base resource URI such as "Session/".
+      arguments -- A dictionary containing the request arguments.
+
+    Return:
+      The object the server passed back.
+    '''
+    if not self.sessionToken and resource != 'Session/':
+      self._log('Doing login because _request() had no token...')
+      self._login()
+
+    self._log('_request(method=%s, resource=%s, arguments=%s)'
+        % ( repr(method), repr(resource), repr(arguments), ))
+
+    url = joinURL(self.baseURL, resource)
+    http = httplib2.Http()
+    body = simplejson.dumps(arguments) if arguments else None
+    headers = { 'Content-Type' : 'application/json' }
+    if self.sessionToken:
+      headers['Auth-Token'] = self.sessionToken
+
+    response, content = http.request(url, method = method, body = body,
+        headers = headers)
+
+    if response['status'] != '200':
+      raise HTTPResponse(response, content)
+
+    return simplejson.loads(content)
+
+
+class DynectDNSClientBroken:
+  '''I (Sean Reifschneider) wasn't able to get this code to work at all,
+  despite a number of a fixes and various attempts.  Including this code
+  most as a reference.'''
+
   def __init__(self, customerName, userName, password, defaultDomain=None):
     self.customerName = customerName
     self.userName = userName
