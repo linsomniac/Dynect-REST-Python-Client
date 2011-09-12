@@ -1,5 +1,35 @@
 import simplejson, urllib2, urllib, sys, httplib2
 
+'''dynect.net DNS management routines.
+This code is based on a library published by dyn.com, but I couldn't get that
+code working.  My fixed version of that code is still available as the
+`DynectDNSClientBroken` class.
+
+Currently, this code only implements the CNAME routines, but those work and
+should be a good starting point for the remainder of the routines.  However,
+I'd seriously consider adding some classes for different record types (like
+CNAME), and then having the code operate on those objects, with generic
+"new", "update", "delete" operations.  This is instead of the existing code
+which has a discrete method for each record type.  I came to the above
+conclusion as I was experimenting with the CNAME.
+
+Example:
+  customername = 'customer'
+  username = 'user'
+  password = 'password'
+  zone = 'example.com'
+  hostname = 'a.example.com'
+
+  dyn = DynectDNSClient(customername, username, password, zone)
+  dyn.debug()
+  print dyn.getANYRecord(zone)
+  print dyn.getCNAMERecord(hostname)
+  print dyn.newCNAMERecord(hostname, '1' + hostname)
+  print dyn.updateCNAMERecord(hostname, '1' + hostname)
+  print dyn.deleteCNAMERecord(hostname)
+  print dyn.updateZone(publish = True)
+'''
+
 #############################
 class LoginFailed(Exception):
   '''Exception raised when a login fails.  Includes these attributes:
@@ -89,23 +119,18 @@ class DynectDNSClient:
 
     response = self._request('GET', resource)
 
-    results = []
-    for new_resource in response['data']:
-      if new_resource.startswith('/REST/'):
-        new_resource = new_resource[6:]
-      new_response = self._request('GET', new_resource)
-
-      if new_response['status'] != 'success':
-        raise ValueError('Got unsuccessful status "%s" on resource "%s"'
-            % ( new_response['status'], new_resource ))
-
-      results.append(new_response['data'])
-
-    return results
+    return self._followResources(response)
 
 
   #############################################################
   def getCNAMERecord(self, fqdn, recordId = None, zone = None):
+    '''Get a list of CNAME records in this `fqdn`.  This recursively does a GET
+    request on each of those records, and returns the list of the `data`
+    elements of those records.
+
+    If any of those gets returns a status other than "successful", a
+    `ValueError` is raised.
+    '''
     if not zone: zone = self.defaultDomainName
     if not '.' in fqdn: fqdn = fqdn + '.' + zone
 
@@ -113,23 +138,23 @@ class DynectDNSClient:
     if recordId:
       resource = joinURL(resource, recordId)
 
-    self._request('GET', resource)
+    response = self._request('GET', resource)
+
+    return self._followResources(response)
 
 
   #############################################################
-  def putCNAMERecord(self, fqdn, cname, ttl = None, zone = None):
+  def newCNAMERecord(self, fqdn, cname, ttl = None, zone = None):
     if not zone: zone = self.defaultDomainName
     if not '.' in fqdn: fqdn = fqdn + '.' + zone
 
     resource = joinURL('CNAMERecord', zone, fqdn)
 
-    arguments = { 'rdata' : { 'cname' : cname } }
-    if ttl:
-      arguments['ttl'] = ttl
-    else:
+    arguments = { 'ttl' : str(ttl), 'rdata' : { 'cname' : cname } }
+    if not ttl:
       arguments['ttl'] = '0'
 
-    self._request('POST', resource, arguments)
+    return self._request('POST', resource, arguments)
 
 
   #####################################################################
@@ -142,13 +167,38 @@ class DynectDNSClient:
     if recordId:
       resource = joinURL(resource, recordId)
 
-    arguments = { 'rdata' : { 'cname' : cname } }
-    if ttl:
-      arguments['ttl'] = ttl
-    else:
+    arguments = { 'ttl' : str(ttl), 'rdata' : { 'cname' : cname } }
+    if not ttl:
       arguments['ttl'] = '0'
 
-    self._request('PUT', resource, arguments)
+    return self._request('PUT', resource, arguments)
+
+
+  ################################################################
+  def deleteCNAMERecord(self, fqdn, recordId = None, zone = None):
+    if not zone: zone = self.defaultDomainName
+    if not '.' in fqdn: fqdn = fqdn + '.' + zone
+
+    resource = joinURL('CNAMERecord', zone, fqdn)
+    if recordId:
+      resource = joinURL(resource, recordId)
+
+    return self._request('DELETE', resource)
+
+
+  ###############################################################
+  def updateZone(self, zone = None, freeze = False, thaw = False,
+      publish = False):
+    if not zone: zone = self.defaultDomainName
+
+    resource = joinURL('Zone', zone)
+
+    arguments = { }
+    if freeze: arguments['freeze'] = freeze
+    if thaw: arguments['thaw'] = thaw
+    if publish: arguments['publish'] = publish
+
+    return self._request('PUT', resource, arguments)
 
 
   ###############################
@@ -166,6 +216,26 @@ class DynectDNSClient:
     if not self.debugEnabled:
       return
     sys.stderr.write('LOG: ' + msg.rstrip() + '\n')
+
+
+  #####################################
+  def _followResources(self, response):
+    '''Given a response object from a call which returns a list of references
+    to objects, look them up and return a list of them.  Raises a ValueError
+    if the response was not a successful one.'''
+    results = []
+    for new_resource in response['data']:
+      if new_resource.startswith('/REST/'):
+        new_resource = new_resource[6:]
+      new_response = self._request('GET', new_resource)
+
+      if new_response['status'] != 'success':
+        raise ValueError('Got unsuccessful status "%s" on resource "%s"'
+            % ( new_response['status'], new_resource ))
+
+      results.append(new_response['data'])
+
+    return results
 
 
   #################
